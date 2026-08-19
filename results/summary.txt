@@ -1,0 +1,223 @@
+Project  Summary - Code Overview and Run Commands
+
+1) Protocol Code
+Important blocks:
+- protocol.h:43-67
+  Defines all message types used across discovery, client, and chat servers
+  (register, discover, validate, login, broadcast, private, list users,
+  history, status change, ack, error).
+
+- protocol.c:39
+  pack_message(): serializes a Message struct into wire bytes.
+
+- protocol.c:76
+  unpack_message(): parses wire bytes back into a Message struct.
+
+- protocol.c:109
+  send_message(): handles partial TCP writes in a loop until all bytes are sent.
+
+- protocol.c:128
+  recv_message(): reads exact fixed header (76 bytes), then payload_len bytes,
+  then unpacks.
+
+- protocol.c:165
+  make_message(): helper to initialize message fields safely in one place.
+
+
+2) Discovery Server Code
+Important blocks:
+- discovery_server.c:37
+  register_user(): stores username, password, client IP and port in registry.
+
+- discovery_server.c:57
+  handle_connection(): per-connection thread handler.
+
+- discovery_server.c:74-84
+  MSG_REGISTER handling: parses user:pass:port and inserts into registry.
+
+- discovery_server.c:86-100
+  MSG_DISCOVER handling: looks up target username and returns ip:port.
+
+- discovery_server.c:102-112
+  MSG_VALIDATE handling: checks username/password correctness for chat servers.
+
+- discovery_server.c:132-166
+  main(): creates listening socket, accepts connections, spawns worker threads.
+
+
+3) Chat Client Code
+Important blocks:
+- chat_client.c:51
+  register_with_discovery(): sends MSG_REGISTER to discovery server.
+
+- chat_client.c:68
+  login_to_chat(): connects to selected chat server and sends MSG_LOGIN.
+
+- chat_client.c:108
+  receiver_thread(): continuously receives server messages asynchronously.
+
+- chat_client.c:134
+  input_loop(): parses CLI commands:
+  /broadcast, /msg, /list, /history, /status, /quit, /help.
+
+- chat_client.c:180-209
+  main(): takes startup inputs, optional registration, login, starts receiver
+  thread, enters command loop.
+
+
+4) Fork-based Chat Server Code
+Important blocks:
+- chat_server_fork.c:83
+  route_message(): central parent-side router for all message types.
+
+- chat_server_fork.c:214
+  child_main(): per-client child process bridge between TCP socket and parent
+  pipes.
+
+- chat_server_fork.c:261
+  sigchld_handler(): reaps terminated child processes to avoid zombies.
+
+- chat_server_fork.c:278-366
+  main(): accepts connections, allocates slot, creates pipes, forks child,
+  reads child->parent messages, routes through parent.
+
+Notes:
+- Parent is central coordinator.
+- Child handles per-client socket I/O.
+- Communication parent<->child happens via pipes.
+
+
+5) Thread-based Chat Server Code
+Important blocks:
+- chat_server_thread.c:45
+  slot_send(): per-client socket send with send_lock protection.
+
+- chat_server_thread.c:84
+  route(): message handler logic (login, broadcast, private, list, history,
+  status, logout).
+
+- chat_server_thread.c:199
+  client_thread(): per-client thread receive loop and cleanup.
+
+- chat_server_thread.c:232-297
+  main(): accepts client, allocates slot, creates one thread per client.
+
+Notes:
+- Shared table is protected by table_lock.
+- Per-socket writes are serialized by send_lock.
+
+
+6) Epoll-based Chat Server Code
+Important blocks:
+- chat_server_epoll.c:62
+  set_nb(): sets sockets to non-blocking mode.
+
+- chat_server_epoll.c:83
+  slot_send(): tries immediate write; on EAGAIN queues pending bytes and enables
+  EPOLLOUT.
+
+- chat_server_epoll.c:134
+  disconnect_client(): removes fd from epoll, closes, clears slot.
+
+- chat_server_epoll.c:147
+  process_message(): all message-type handling logic.
+
+- chat_server_epoll.c:252
+  handle_read(): reads until EAGAIN, rebuilds full messages from rbuf.
+
+- chat_server_epoll.c:281
+  handle_write(): flushes queued send buffer when socket becomes writable.
+
+- chat_server_epoll.c:293-372
+  main(): epoll setup, event loop, accepts new clients, dispatches read/write
+  handlers.
+
+Notes:
+- Single-thread event loop interleaves all clients.
+- No per-client process/thread; per-client state is in Client slots.
+
+
+7) Benchmark Script Summary (benchmark.py)
+Important blocks:
+- benchmark.py:47-59
+  Server config, ports, client counts, stress levels, timing intervals.
+
+- benchmark.py:140-173
+  Server process helpers (start/stop/wait/find pid).
+
+- benchmark.py:225
+  load_test(): 10 concurrent clients, each sends fixed count of broadcasts,
+  collects latency + CPU + memory.
+
+- benchmark.py:248
+  stress_test(): cumulative client levels [2,4,6,8,10], records CPU/memory and
+  latency trend per level.
+
+CPU measurement lines:
+- benchmark.py:87-137 (Sampler class)
+- benchmark.py:113, 118, 124
+  cpu_percent sampled across process tree (includes children).
+
+Memory measurement lines:
+- benchmark.py:62-73
+  proc_mem(): reads VmRSS from /proc/<pid>/status and PSS from
+  /proc/<pid>/smaps_rollup.
+
+- benchmark.py:74-84
+  mem_tree(): sums VmRSS/PSS across root process and child processes.
+
+- benchmark.py:127-133
+  Sampler loop records cpu, vmrss, pss samples.
+
+Latency measurement lines:
+- Load test latency:
+  benchmark.py:203-211 and 214-218
+  client stores send timestamp queue and matches on receives.
+
+- Stress test latency:
+  benchmark.py:253-260
+  measures send-side elapsed time in stress sender loop.
+
+Plot generation lines:
+- benchmark.py:320  latency distribution plot
+- benchmark.py:349  CPU vs clients plot
+- benchmark.py:354  memory vs clients plot
+- benchmark.py:359  latency vs clients plot
+
+
+8) Commands to Execute (Manual Run)
+From project directory:
+
+Build all:
+make
+
+Start discovery server (Terminal 1):
+./discovery_server 9000
+
+Start one chat server (Terminal 2):
+Fork:
+./chat_server_fork 9001 127.0.0.1 9000
+
+Thread:
+./chat_server_thread 9002 127.0.0.1 9000
+
+Epoll:
+./chat_server_epoll 9003 127.0.0.1 9000
+
+Start clients (Terminal 3 and Terminal 4):
+If using fork server:
+./chat_client 127.0.0.1 9000 127.0.0.1 9001
+
+If using thread server:
+./chat_client 127.0.0.1 9000 127.0.0.1 9002
+
+If using epoll server:
+./chat_client 127.0.0.1 9000 127.0.0.1 9003
+
+Client commands after login:
+/broadcast hello all
+/msg <username> hello private
+/list
+/history
+/status busy
+/quit

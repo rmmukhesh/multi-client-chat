@@ -1,0 +1,52 @@
+Learnings and Challenges -- Assignment 2: Multi-Client Chat System
+CS23B038 | CS 3205 Computer Networks
+====================================================================
+
+1. TCP does not have message boundaries
+----------------------------------------
+TCP is a stream -- recv() can return part of a message, a full one, or
+two joined together. We had to always read exactly 76 header bytes
+first, then exactly payload_len more bytes. This bug only showed up
+under load, not during simple manual tests.
+
+2. Each concurrency model had its own problem
+----------------------------------------------
+Fork: The client table had to be in shared memory (mmap) because child
+processes do not share memory with the parent. Messages had to go
+through pipes to the parent, which then sent them to other clients.
+A SIGCHLD handler was needed to clean up finished child processes.
+
+Thread: Two locks were needed -- one for the shared client table and
+one per client for sending to that socket. Getting the order wrong in
+one place caused a deadlock when two clients sent messages at the same
+time.
+
+Epoll (edge-triggered): The kernel tells you only once when new data
+arrives. If you do not read everything in one go, the leftover data
+just sits there. Same for sending -- if the socket is full (EAGAIN),
+you have to save what is left and wait for EPOLLOUT before retrying.
+
+3. Benchmark results were not what we expected
+------------------------------------------------
+We thought epoll would be fastest since it runs on a single thread.
+But fork had lower latency at 10 clients. The reason: epoll sends a
+broadcast to 9 sockets one by one on the same thread, so one slow
+client slows down everyone else. Fork handles each client in its own
+process, so they all send at the same time. Epoll would likely win
+at very high client counts where starting a new process each time gets
+expensive.
+
+4. Measuring latency correctly
+--------------------------------
+Measuring time from send to the very next recv was wrong, because
+replies for earlier messages can come back before later ones. The fix
+was to keep a list of send times and match each reply to the first
+unmatched send. We also added a 5ms pause between sends so the socket
+buffer does not fill up and skew the numbers.
+
+5. Protocol design and testing
+--------------------------------
+A fixed 76-byte header made sending and receiving straightforward --
+no need to figure out where one message ends and the next starts.
+The downside is some wasted space for short messages, but that is fine
+here. 
