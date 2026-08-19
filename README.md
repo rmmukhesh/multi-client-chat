@@ -1,7 +1,7 @@
 # Assignment 2: Multi-Client Chat System with Performance Analytics
 
-**Course:** CS 3205 — Computer Networks
-**Roll No:** CS23B038
+**Course:** CS 3205 — Computer Networks  
+**Roll No:** CS23B040
 
 ---
 
